@@ -1,0 +1,4 @@
+domain_name      = "example.org"
+forward_to_email = "myrealemail@gmail.com"
+region           = "us-east-1"
+# s3_prefix      = "inbound/"

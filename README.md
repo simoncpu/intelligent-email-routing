@@ -6,7 +6,7 @@ This deploys an Amazon SES inbound pipeline that forwards **any** email sent to 
 - S3 bucket to store raw inbound emails
 - SES domain identity + DKIM (sending/forwarding)
 - SES receipt rule set: S3 store then invoke Lambda
-- Python 3.11 Lambda that forwards as a wrapped `message/rfc822` (DMARC-safe)
+- Python 3.13 Lambda that forwards as a wrapped `message/rfc822` (DMARC-safe)
 
 ## Prereqs
 - AWS account with IAM creds configured: `aws configure`
@@ -44,5 +44,5 @@ This deploys an Amazon SES inbound pipeline that forwards **any** email sent to 
 
 ## Files
 - `main.tf`, `variables.tf`, `outputs.tf` - Terraform stack
-- `lambda.py` - Python 3.11 Lambda
+- `lambda.py` - Python 3.13 Lambda
 - `terraform.tfvars` - your values (example provided)

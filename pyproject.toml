@@ -1,0 +1,10 @@
+[tool.black]
+line-length = 88
+target-version = ['py313']
+skip-string-normalization = true
+
+[tool.pylint.messages_control]
+disable = "C0111"  # Missing docstrings
+
+[tool.isort]
+profile = "black"
