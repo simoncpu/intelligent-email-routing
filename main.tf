@@ -191,15 +191,16 @@ resource "aws_lambda_permission" "allow_ses_scoped" {
   source_arn    = aws_ses_receipt_rule.catchall.arn
 }
 
-############################
-# Optional: S3 lifecycle (uncomment to auto-delete after 30d)
-############################
-# resource "aws_s3_bucket_lifecycle_configuration" "mail" {
-#   bucket = aws_s3_bucket.mail.id
-#   rule {
-#     id     = "expire-raw"
-#     status = "Enabled"
-#     filter { prefix = var.s3_prefix }
-#     expiration { days = 30 }
-#   }
-# }
+#########################################################################
+# S3 lifecycle - auto-delete after 30 days
+# You may comment out the section below if you want to keep your emails.
+#########################################################################
+resource "aws_s3_bucket_lifecycle_configuration" "mail" {
+  bucket = aws_s3_bucket.mail.id
+  rule {
+    id     = "expire-raw"
+    status = "Enabled"
+    filter { prefix = var.s3_prefix }
+    expiration { days = 30 }
+  }
+}

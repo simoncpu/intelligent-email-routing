@@ -40,9 +40,12 @@ This deploys an Amazon SES inbound pipeline that forwards **any** email sent to 
 - The Lambda forwards by **sending a new email** via SES with the original message attached as `message/rfc822` and sets `Reply-To` to the original sender.
 - Costs: SES receiving ~$0.19 per 1,000 small emails (<=256KB); SES sending $0.10/1k; S3+Lambda minimal at low volume.
 - If your domain is *not* verified yet, delivery won't occur - add the DNS records first. You can keep running `terraform apply` as you verify.
-- To purge archived mail, enable S3 lifecycle (see comments in `main.tf`).
+- To avoid purging archived mail, disable S3 lifecycle (see comments in `main.tf`).
 
 ## Files
 - `main.tf`, `variables.tf`, `outputs.tf` - Terraform stack
 - `lambda.py` - Python 3.13 Lambda
 - `terraform.tfvars` - your values (example provided)
+
+## Contributors
+Simon Cornelius P. Umacob
