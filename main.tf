@@ -177,6 +177,7 @@ resource "aws_lambda_function" "forwarder" {
   handler       = "lambda.handler"
   runtime       = "python3.13"
   filename      = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout       = 30
   environment {
     variables = {
