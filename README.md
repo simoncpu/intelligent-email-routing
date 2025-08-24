@@ -20,7 +20,7 @@ This deploys an Amazon SES inbound pipeline that forwards **any** email sent to 
 1. Edit `terraform.tfvars`:
    ```hcl
    domain_name      = "example.org"
-   forward_to_email = "myrealemail@gmail.com"
+   forward_to_email = "example@gmail.com"
    region           = "us-east-1"
    ```
 2. Init and apply:
