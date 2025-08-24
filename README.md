@@ -47,5 +47,9 @@ This deploys an Amazon SES inbound pipeline that forwards **any** email sent to 
 - `lambda.py` - Python 3.13 Lambda
 - `terraform.tfvars` - your values (example provided)
 
+## TODO
+- Add documentation on how to manually set DNS records for AWS SES
+- Add documentation for SPF, otherwise AWS SES will complain that MAIL FROM record is not aligned. Alignment mode needs to strict.
+
 ## Contributors
 Simon Cornelius P. Umacob
