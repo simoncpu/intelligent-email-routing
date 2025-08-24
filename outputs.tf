@@ -5,20 +5,20 @@ output "bucket_name" {
 
 output "ses_domain_verification_token" {
   value = aws_ses_domain_identity.this.verification_token
-  description = "Create TXT at _amazonses.${var.domain_name} with this value"
+  description = "Domain verification token for SES"
 }
 
 output "dkim_tokens" {
   value = aws_ses_domain_dkim.this.dkim_tokens
-  description = "Create 3 CNAMEs: <token>._domainkey.${var.domain_name} -> <token>.dkim.amazonses.com"
+  description = "DKIM tokens for SES domain verification"
 }
 
 output "mx_record_value" {
   value = "10 inbound-smtp.${var.region}.amazonaws.com"
-  description = "Create MX on ${var.domain_name} with this value"
+  description = "MX record value for your domain"
 }
 
 output "from_address_to_verify" {
   value       = "forwarder@${var.domain_name}"
-  description = "Optional: verify this SES identity too (domain verification generally covers it)"
+  description = "Optional SES email identity to verify"
 }
