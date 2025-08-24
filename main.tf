@@ -21,7 +21,7 @@ provider "aws" {
 ############################
 
 resource "aws_s3_bucket" "mail" {
-  bucket        = "${var.project_name}-${var.domain_name}-mail"
+  bucket        = var.s3_bucket
   force_destroy = true
 }
 
@@ -55,7 +55,15 @@ resource "aws_s3_bucket_policy" "mail" {
 }
 
 ############################################
-# SES domain identity + DKIM (DNS external)
+# Route53 Hosted Zone - Use existing zone
+############################################
+
+data "aws_route53_zone" "main" {
+  name = var.domain_name
+}
+
+############################################
+# SES domain identity + DKIM + DNS automation
 ############################################
 
 resource "aws_ses_domain_identity" "this" {
@@ -64,6 +72,48 @@ resource "aws_ses_domain_identity" "this" {
 
 resource "aws_ses_domain_dkim" "this" {
   domain = aws_ses_domain_identity.this.domain
+}
+
+
+# Domain verification TXT records
+resource "aws_route53_record" "ses_verification" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "_amazonses.${var.domain_name}"
+  type    = "TXT"
+  ttl     = 300
+  records = [aws_ses_domain_identity.this.verification_token]
+}
+
+
+# DKIM CNAME records (3 records for main domain email authentication)
+resource "aws_route53_record" "dkim" {
+  count   = 3
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "${aws_ses_domain_dkim.this.dkim_tokens[count.index]}._domainkey.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  records = ["${aws_ses_domain_dkim.this.dkim_tokens[count.index]}.dkim.amazonses.com"]
+}
+
+
+# SES domain identity verification (waits for DNS propagation)
+resource "aws_ses_domain_identity_verification" "this" {
+  domain = aws_ses_domain_identity.this.id
+  depends_on = [
+    aws_route53_record.ses_verification,
+    aws_route53_record.dkim
+  ]
+  timeouts {
+    create = "5m"
+  }
+}
+
+
+# Configure custom MAIL FROM domain
+resource "aws_ses_domain_mail_from" "this" {
+  domain           = aws_ses_domain_identity.this.domain
+  mail_from_domain = "forwarder.${var.domain_name}"
+  behavior_on_mx_failure = "RejectMessage"
 }
 
 ############################################
@@ -131,13 +181,16 @@ resource "aws_lambda_function" "forwarder" {
   environment {
     variables = {
       S3_BUCKET       = aws_s3_bucket.mail.bucket
-      S3_PREFIX       = var.s3_prefix
+      S3_PREFIX       = "${var.domain_name}/"
       FORWARD_TO      = var.forward_to_email
-      FROM_ADDRESS    = "forwarder@${var.domain_name}"
+      FROM_ADDRESS    = "forwarder@forwarder.${var.domain_name}"
       VERBOSE_LOGGING = "false"
     }
   }
-  depends_on = [aws_s3_bucket_policy.mail]
+  depends_on = [
+    aws_s3_bucket_policy.mail,
+    aws_ses_domain_identity_verification.this
+  ]
 }
 
 ############################################
@@ -172,7 +225,7 @@ resource "aws_ses_receipt_rule" "catchall" {
 
   s3_action {
     bucket_name       = aws_s3_bucket.mail.bucket
-    object_key_prefix = var.s3_prefix
+    object_key_prefix = "${var.domain_name}/"
     position          = 1
   }
 
@@ -200,7 +253,56 @@ resource "aws_s3_bucket_lifecycle_configuration" "mail" {
   rule {
     id     = "expire-raw"
     status = "Enabled"
-    filter { prefix = var.s3_prefix }
+    filter { prefix = "${var.domain_name}/" }
     expiration { days = 30 }
   }
+}
+
+############################################
+# Additional DNS records for email delivery
+############################################
+
+# MX record for receiving emails
+resource "aws_route53_record" "mx" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "MX"
+  ttl     = 300
+  records = ["10 inbound-smtp.${var.region}.amazonaws.com"]
+}
+
+# MX record for MAIL FROM domain (for bounce handling)
+resource "aws_route53_record" "mail_from_mx" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "forwarder.${var.domain_name}"
+  type    = "MX"
+  ttl     = 300
+  records = ["10 feedback-smtp.${var.region}.amazonses.com"]
+}
+
+# SPF record for sender authentication
+resource "aws_route53_record" "spf" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "TXT"
+  ttl     = 300
+  records = ["v=spf1 include:amazonses.com -all"]
+}
+
+# SPF record for MAIL FROM domain
+resource "aws_route53_record" "mail_from_spf" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "forwarder.${var.domain_name}"
+  type    = "TXT"
+  ttl     = 300
+  records = ["v=spf1 include:amazonses.com -all"]
+}
+
+# DMARC record for email security policy
+resource "aws_route53_record" "dmarc" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "_dmarc.${var.domain_name}"
+  type    = "TXT"
+  ttl     = 300
+  records = ["v=DMARC1; p=quarantine; pct=100; rua=mailto:${var.dmarc_rua_email}; sp=none; aspf=r;"]
 }

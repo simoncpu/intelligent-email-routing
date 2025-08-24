@@ -20,8 +20,12 @@ variable "region" {
   description = "SES receiving region (e.g., us-east-1)"
 }
 
-variable "s3_prefix" {
+variable "s3_bucket" {
   type        = string
-  default     = "inbound/"
-  description = "Prefix in S3 bucket to store raw emails"
+  description = "S3 bucket name for storing raw emails from multiple domains"
+}
+
+variable "dmarc_rua_email" {
+  type        = string
+  description = "Email address for DMARC aggregate reports (e.g., re+eddisiahumt@dmarc.postmarkapp.com)"
 }
