@@ -145,7 +145,7 @@ resource "aws_iam_role_policy" "lambda" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ],
-        Resource = "*"
+        Resource = aws_cloudwatch_log_group.lambda_logs.arn
       },
       {
         Effect = "Allow",
@@ -159,6 +159,15 @@ resource "aws_iam_role_policy" "lambda" {
       }
     ]
   })
+}
+
+############################
+# CloudWatch Log Group
+############################
+
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name              = "/aws/lambda/${var.project_name}-forwarder"
+  retention_in_days = 30
 }
 
 ############################
@@ -189,6 +198,7 @@ resource "aws_lambda_function" "forwarder" {
     }
   }
   depends_on = [
+    aws_cloudwatch_log_group.lambda_logs,
     aws_s3_bucket_policy.mail,
     aws_ses_domain_identity_verification.this
   ]
