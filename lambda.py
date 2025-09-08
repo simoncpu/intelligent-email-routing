@@ -1,9 +1,11 @@
 import email
+import html
 import logging
 import os
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr, parseaddr
 
 import boto3
 
@@ -72,9 +74,9 @@ Date: {orig_date}
     context_html = f"""<div style="border: 1px solid #ccc; padding: 10px; \
 margin: 10px 0; background-color: #f9f9f9;">
 <strong>---------- Forwarded message ----------</strong><br>
-<strong>From:</strong> {orig_from}<br>
-<strong>To:</strong> {orig_to}<br>
-<strong>Date:</strong> {orig_date}<br>
+<strong>From:</strong> {html.escape(orig_from)}<br>
+<strong>To:</strong> {html.escape(orig_to)}<br>
+<strong>Date:</strong> {html.escape(orig_date)}<br>
 </div>
 """
 
@@ -90,7 +92,12 @@ def handler(event, context):
         record = event['Records'][0]
         ses_record = record['ses']
         mail = ses_record['mail']
+        receipt = ses_record['receipt']
         message_id = mail['messageId']
+
+        # Get the actual recipient email from SES event
+        recipients = receipt['recipients']
+        actual_recipient = recipients[0] if recipients else ''
 
         key = f'{PREFIX}{message_id}'
         log.info('Fetching raw email from s3://%s/%s', BUCKET, key)
@@ -100,7 +107,6 @@ def handler(event, context):
 
         original = email.message_from_bytes(raw_bytes)
         orig_from = original.get('From', '')
-        orig_to = original.get('To', '')
         orig_date = original.get('Date', '')
         subject = original.get('Subject', '')
 
@@ -109,12 +115,16 @@ def handler(event, context):
 
         # Create forwarding context
         context_text, context_html = create_forwarding_context(
-            orig_from, orig_to, orig_date
+            orig_from, actual_recipient, orig_date
         )
+
+        # Extract display name from original sender for From header
+        orig_display_name, _ = parseaddr(orig_from)
+        formatted_from = formataddr((orig_display_name, FROM_ADDRESS))
 
         # Create the multipart message
         msg = MIMEMultipart('mixed')
-        msg['From'] = FROM_ADDRESS
+        msg['From'] = formatted_from
         msg['To'] = FORWARD_TO
         msg['Subject'] = subject
         if orig_from:
