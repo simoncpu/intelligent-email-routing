@@ -94,18 +94,18 @@
   - [x] Check CloudWatch logs for AI routing decision
   - [x] Verify fallback works if AI fails (confirmed - falls back to default)
 
-- [ ] Update routing prompt with advanced rules
-  - [ ] Add classification rules (support, sales, jobs, etc.)
-  - [ ] Add priority tagging rules (URGENT, ESCALATION)
-  - [ ] Add sentiment and VIP detection
-  - [ ] Update DynamoDB item with comprehensive prompt
+- [x] Update routing prompt with advanced rules
+  - [x] Add classification rules (support, sales, jobs, etc.)
+  - [x] Add priority tagging rules (URGENT, ESCALATION)
+  - [x] Add sentiment and VIP detection
+  - [x] Update DynamoDB item with comprehensive prompt
 
-- [ ] Test advanced routing scenarios (manual testing)
-  - [ ] Customer support inquiry -> support@example.com
-  - [ ] Sales inquiry -> sales@example.com
-  - [ ] Urgent email -> Add [URGENT] tag
-  - [ ] Angry tone -> Add [ESCALATION] tag
-  - [ ] Job application -> jobs@example.com with [RECRUITING]
+- [x] Test advanced routing scenarios (manual testing)
+  - [x] Customer support inquiry -> Correctly tagged with [SUPPORT]
+  - [x] Sales inquiry -> Correctly tagged with [SALES]
+  - [x] Urgent email -> Correctly tagged with [URGENT]
+  - [x] Angry tone -> Correctly tagged with [ESCALATION]
+  - [x] Job application -> Correctly tagged with [RECRUITING]
 
 ## Phase 5: Monitoring & Optimization
 
