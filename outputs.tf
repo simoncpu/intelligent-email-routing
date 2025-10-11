@@ -19,6 +19,6 @@ output "domain_verification_status" {
 }
 
 output "from_address" {
-  value = "forwarder@forwarder.${var.domain_name}"
+  value = "forwarder@${var.domain_name}"
   description = "Verified sender address for forwarded emails"
 }

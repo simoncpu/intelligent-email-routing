@@ -44,13 +44,17 @@ Email Flow:
 ### 1. DynamoDB Table Structure
 
 ```
-Table: email-routing-config
-Primary Key: id (String)
+Table: ses-catchall-forwarder-routing
+Composite Key Schema:
+  - Partition Key (pk): "CONFIG"
+  - Sort Key (sk): "routing_prompt"
+
 Attributes:
-  - id: "routing_prompt" (primary record)
+  - pk: "CONFIG" (partition key)
+  - sk: "routing_prompt" (sort key)
   - prompt: Text containing routing instructions
   - enabled: Boolean to enable/disable AI routing
-  - model_id: Bedrock model to use (default: "anthropic.claude-3-haiku-20240307-v1:0")
+  - model_id: Bedrock model to use (default: "anthropic.claude-sonnet-4-5-20250929-v1:0")
   - temperature: Float for response consistency (default: 0.1)
   - max_tokens: Integer for response length (default: 500)
   - updated_at: ISO 8601 timestamp
@@ -59,6 +63,12 @@ Attributes:
 
 ### 2. Routing Prompt Template
 
+**Default Initial Prompt (stored in DynamoDB):**
+```
+Prepend [TEST] to e-mail subjects for all incoming email.
+```
+
+**Example Advanced Routing Prompt:**
 ```
 You are an email routing assistant. Analyze the following email and determine where it should be forwarded based on these rules:
 
@@ -150,20 +160,40 @@ def handler(event, context):
 
 #### DynamoDB Table
 ```hcl
-resource "aws_dynamodb_table" "email_routing_config" {
-  name           = "${var.project_name}-routing-config"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "id"
+resource "aws_dynamodb_table" "routing" {
+  name         = "${var.project_name}-routing"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
 
   attribute {
-    name = "id"
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
     type = "S"
   }
 
   tags = {
-    Name = "${var.project_name}-routing-config"
+    Name        = "${var.project_name}-routing"
+    Purpose     = "AI email routing and general storage"
+    ManagedBy   = "Terraform"
   }
 }
+```
+
+**Composite Key Pattern**: This table uses a hierarchical key design:
+- **Partition Key (pk)**: Entity type (e.g., "CONFIG", "EMAIL", "USER")
+- **Sort Key (sk)**: Entity identifier (e.g., "routing_prompt", "2025-01-15#msg123")
+
+**Example Data Structure**:
+```
+pk="CONFIG"     sk="routing_prompt"     -> AI routing prompt
+pk="CONFIG"     sk="settings"           -> Application settings
+pk="EMAIL"      sk="2025-01-15#msg123"  -> Email record
+pk="USER"       sk="user@example.com"   -> User preferences
 ```
 
 #### IAM Permissions
@@ -175,14 +205,14 @@ resource "aws_dynamodb_table" "email_routing_config" {
     "dynamodb:GetItem",
     "dynamodb:Query"
   ],
-  Resource = aws_dynamodb_table.email_routing_config.arn
+  Resource = aws_dynamodb_table.routing.arn
 },
 {
   Effect = "Allow",
   Action = [
     "bedrock:InvokeModel"
   ],
-  Resource = "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+  Resource = "arn:aws:bedrock:${var.region}::foundation-model/${var.bedrock_model_id}"
 }
 ```
 
@@ -191,7 +221,7 @@ resource "aws_dynamodb_table" "email_routing_config" {
 environment {
   variables = {
     # Existing variables...
-    ROUTING_TABLE     = aws_dynamodb_table.email_routing_config.name
+    ROUTING_TABLE     = aws_dynamodb_table.routing.name
     AI_ROUTING_ENABLED = var.ai_routing_enabled
     BEDROCK_MODEL_ID  = var.bedrock_model_id
   }
@@ -209,8 +239,8 @@ variable "ai_routing_enabled" {
 
 variable "bedrock_model_id" {
   type        = string
-  default     = "anthropic.claude-3-haiku-20240307-v1:0"
-  description = "Bedrock model ID for email analysis"
+  default     = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+  description = "AWS Bedrock model ID for email analysis (Claude Sonnet 4.5)"
 }
 
 variable "routing_fallback_email" {
@@ -264,10 +294,10 @@ echo "Test email body" | mail -s "Test Subject" test@yourdomain.org
 aws logs tail /aws/lambda/ses-catchall-forwarder-forwarder --follow
 
 # Check DynamoDB prompt
-aws dynamodb get-item --table-name ses-catchall-forwarder-routing-config --key '{"id":{"S":"routing_prompt"}}'
+aws dynamodb get-item --table-name ses-catchall-forwarder-routing --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}'
 
 # Update routing prompt
-aws dynamodb put-item --table-name ses-catchall-forwarder-routing-config --item file://routing-prompt.json
+aws dynamodb put-item --table-name ses-catchall-forwarder-routing --item file://routing-prompt.json
 ```
 
 ## Rollout Plan
@@ -293,15 +323,16 @@ aws dynamodb put-item --table-name ses-catchall-forwarder-routing-config --item 
 
 ### Estimated Monthly Costs (1000 emails/month)
 - DynamoDB: ~$0.25 (pay-per-request)
-- Bedrock Claude Haiku: ~$0.50 (1000 requests @ ~500 tokens each)
+- Bedrock Claude Sonnet 4.5: ~$0.50-1.00 (1000 requests @ ~500 tokens each)
 - Additional Lambda execution: ~$0.10
-- Total additional cost: ~$0.85/month
+- Total additional cost: ~$0.85-1.35/month
 
 ### Cost Optimization
-- Use Claude Haiku (fastest, cheapest) for routing
+- Claude Sonnet 4.5 offers excellent accuracy for email routing
 - Cache routing decisions for similar emails
 - Batch process during off-peak hours
 - Set confidence threshold to reduce AI calls
+- For high-volume use cases, consider Claude Haiku (faster, cheaper)
 
 ## Security Considerations
 

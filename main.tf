@@ -117,6 +117,33 @@ resource "aws_ses_domain_mail_from" "this" {
 }
 
 ############################################
+# DynamoDB table for AI routing configuration
+############################################
+
+resource "aws_dynamodb_table" "routing" {
+  name         = "${var.project_name}-routing"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  tags = {
+    Name        = "${var.project_name}-routing"
+    Purpose     = "AI email routing and general storage"
+    ManagedBy   = "Terraform"
+  }
+}
+
+############################################
 # Lambda IAM role/policy
 ############################################
 
@@ -145,7 +172,10 @@ resource "aws_iam_role_policy" "lambda" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ],
-        Resource = aws_cloudwatch_log_group.lambda_logs.arn
+        Resource = [
+          aws_cloudwatch_log_group.lambda_logs.arn,
+          "${aws_cloudwatch_log_group.lambda_logs.arn}:*"
+        ]
       },
       {
         Effect = "Allow",
@@ -156,6 +186,22 @@ resource "aws_iam_role_policy" "lambda" {
         Effect = "Allow",
         Action = ["ses:SendRawEmail"],
         Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query"
+        ],
+        Resource = aws_dynamodb_table.routing.arn
+      },
+      {
+        Effect = "Allow",
+        Action = ["bedrock:InvokeModel"],
+        Resource = [
+          "arn:aws:bedrock:${var.region}:*:inference-profile/${var.bedrock_model_id}",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        ]
       }
     ]
   })
@@ -190,11 +236,14 @@ resource "aws_lambda_function" "forwarder" {
   timeout       = 30
   environment {
     variables = {
-      S3_BUCKET       = aws_s3_bucket.mail.bucket
-      S3_PREFIX       = "${var.domain_name}/"
-      FORWARD_TO      = var.forward_to_email
-      FROM_ADDRESS    = "forwarder@forwarder.${var.domain_name}"
-      VERBOSE_LOGGING = "false"
+      S3_BUCKET          = aws_s3_bucket.mail.bucket
+      S3_PREFIX          = "${var.domain_name}/"
+      FORWARD_TO         = var.forward_to_email
+      FROM_ADDRESS       = "forwarder@${var.domain_name}"
+      VERBOSE_LOGGING    = "false"
+      AI_ROUTING_ENABLED = tostring(var.ai_routing_enabled)
+      ROUTING_TABLE      = aws_dynamodb_table.routing.name
+      BEDROCK_MODEL_ID   = var.bedrock_model_id
     }
   }
   depends_on = [
@@ -206,15 +255,10 @@ resource "aws_lambda_function" "forwarder" {
 
 ############################################
 # SES receipt rule set (S3 -> Lambda)
+# Use existing rule set to support multiple domains
+# Note: Rule set activation is managed manually via AWS CLI
+# to avoid conflicts when managing multiple domains
 ############################################
-
-resource "aws_ses_receipt_rule_set" "main" {
-  rule_set_name = "${var.project_name}-rules"
-}
-
-resource "aws_ses_active_receipt_rule_set" "active" {
-  rule_set_name = aws_ses_receipt_rule_set.main.rule_set_name
-}
 
 resource "aws_lambda_permission" "allow_ses_unscoped" {
   statement_id  = "AllowSESToInvoke"
@@ -224,8 +268,8 @@ resource "aws_lambda_permission" "allow_ses_unscoped" {
 }
 
 resource "aws_ses_receipt_rule" "catchall" {
-  name          = "catchall-rule"
-  rule_set_name = aws_ses_receipt_rule_set.main.rule_set_name
+  name          = "${var.project_name}-catchall-rule"
+  rule_set_name = "ses-catchall-forwarder-rules"
   enabled       = true
 
   # Match the whole domain (catch-all)
