@@ -1,4 +1,4 @@
-# AI Email Agent - Intelligent Email Forwarding with AWS SES
+# Intelligent Email Forwarding with AWS Bedrock + SES
 
 An intelligent email forwarding system that routes emails sent to `*@yourdomain.org` to your destination address (e.g., Gmail). Uses AWS Bedrock Claude to intelligently analyze and route emails based on content.
 
