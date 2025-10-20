@@ -1,0 +1,5 @@
+# MCP Lambda Dependencies
+# Note: boto3 is included in the AWS Lambda Python runtime, so it's not needed here
+
+# Currently no external dependencies required
+# The MCP Lambda function uses only standard library and boto3

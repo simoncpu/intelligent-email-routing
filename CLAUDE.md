@@ -11,6 +11,7 @@ A Terraform-deployed AWS infrastructure that creates an intelligent catch-all em
 - Preserves DMARC/SPF compliance by forwarding original content inline with forwarding context
 - Attaches original email as `message/rfc822` for reference
 - **AI-Powered Routing (Optional)**: Uses AWS Bedrock Claude Sonnet 4.5 to intelligently classify and route emails based on content analysis
+- **MCP Server (Optional)**: Conversational prompt management through Claude Code via Model Context Protocol (JSON-RPC 2.0, MCP 2025-03-26)
 - **Multi-Domain Support**: Uses shared SES receipt rule set (ses-catchall-forwarder-rules) to support multiple domains in the same AWS account and region
 
 ## Architecture
@@ -70,14 +71,17 @@ aws logs tail /aws/lambda/{project-name}-forwarder --follow
 
 ## Key Files
 
-- `main.tf` - Primary Terraform configuration defining AWS resources (SES, S3, Lambda, DynamoDB, IAM)
+- `main.tf` - Primary Terraform configuration defining AWS resources (SES, S3, Lambda, DynamoDB, IAM, MCP server)
 - `lambda.py` - Python 3.13 Lambda function that handles email forwarding with optional AI routing
+- `mcp_lambda.py` - Python 3.13 Lambda function for MCP server (prompt management)
 - `variables.tf` - Terraform input variables with defaults including AI routing settings
 - `outputs.tf` - DNS configuration values and resource identifiers
 - `terraform.tfvars` - Your configuration (domain, forward email, region, AI settings) - not in git
 - `terraform.tfvars.example` - Template for configuration
 - `email-copilot.md` - Planning document for AI-powered routing implementation
 - `docs/bedrock.md` - Detailed Bedrock configuration, troubleshooting, and cost optimization
+- `docs/mcp-server.md` - MCP server setup, API key management, and usage guide
+- `.env` - MCP API key for initial setup (not in git)
 
 ## Critical Configuration
 
@@ -209,6 +213,33 @@ Common issues:
 - Replace en dash (–) with regular hyphen (-)
 - Use straight quotes (") instead of curly quotes ("")
 - Keep all text in standard ASCII range for maximum compatibility
+
+## Security and PII Requirements
+
+**CRITICAL**: Never document or commit the following sensitive information to git:
+
+### Prohibited Information
+- **API Keys**: Never include real MCP API keys, AWS access keys, or any authentication tokens in tracked files
+- **Personal Email Addresses**: Use placeholders like `user@example.com` or `example@gmail.com` instead of real addresses
+- **Personal Names**: Avoid full names in documentation (git commit history is acceptable)
+- **Domain Names**: Use `yourdomain.org` or `example.com` instead of real domains
+- **AWS Resource IDs**: Never include Lambda function URLs, S3 bucket names, or other resource identifiers that could expose infrastructure
+- **Credentials**: No passwords, secrets, or private keys in any tracked files
+
+### Safe Practices
+- Always use example placeholders in documentation
+- Keep sensitive data in `.env` and `terraform.tfvars` (both are gitignored)
+- Use `terraform.tfvars.example` for templates with placeholder values only
+- When documenting API keys, use fake examples like `your-api-key-here` or `xxxxxxxx`
+- Review documentation files before committing to ensure no PII is present
+- The acceptable test email `f8cuek187@mozmail.com` may be used in examples
+
+### Files That Should NEVER Contain Real Values
+- README.md
+- CLAUDE.md
+- docs/*.md
+- *.example files
+- Any file tracked in git (except .gitignore itself)
 
 ## AI Routing Implementation Notes
 

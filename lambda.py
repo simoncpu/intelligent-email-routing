@@ -28,6 +28,32 @@ BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-sonne
 log = logging.getLogger()
 log.setLevel(logging.DEBUG if VERBOSE_LOGGING else logging.INFO)
 
+# System prompt template - hard-coded to prevent prompt injection
+SYSTEM_PROMPT_TEMPLATE = """You are an email routing assistant. Analyze the email and determine routing based on the rules provided.
+
+ROUTING RULES:
+{routing_rules}
+
+EMAIL CONTENT:
+From: {sender}
+Subject: {subject}
+Body: {body}
+
+IMPORTANT: You MUST respond with valid JSON only. No markdown, no code blocks, no explanations.
+
+REQUIRED JSON FORMAT:
+{{
+  "route_to": ["email@example.com"],
+  "tags": ["TAG1", "TAG2"],
+  "confidence": 0.95,
+  "reasoning": "Brief explanation"
+}}"""
+
+# Default routing rules - fallback when DynamoDB is unavailable or empty
+DEFAULT_ROUTING_RULES = """- Route all emails to the default forward address
+- Add [EMAIL] tag to all messages
+- Use high confidence (0.9) for default routing"""
+
 
 def extract_email_content(original_msg):
     """
@@ -90,14 +116,14 @@ margin: 10px 0; background-color: #f9f9f9;">
     return context_text, context_html
 
 
-def get_routing_prompt():
+def get_routing_rules():
     """
-    Fetch routing prompt from DynamoDB table.
-    Returns the prompt string or None if not found/disabled.
+    Fetch routing rules from DynamoDB table.
+    Returns routing rules string, falls back to DEFAULT_ROUTING_RULES if unavailable.
     """
     if not ROUTING_TABLE:
-        log.warning('ROUTING_TABLE not configured')
-        return None
+        log.warning('ROUTING_TABLE not configured, using default routing rules')
+        return DEFAULT_ROUTING_RULES
 
     try:
         response = dynamodb.get_item(
@@ -106,8 +132,8 @@ def get_routing_prompt():
         )
 
         if 'Item' not in response:
-            log.warning('Routing prompt not found in DynamoDB')
-            return None
+            log.warning('Routing config not found in DynamoDB, using default routing rules')
+            return DEFAULT_ROUTING_RULES
 
         item = response['Item']
 
@@ -116,21 +142,22 @@ def get_routing_prompt():
             log.info('AI routing disabled in DynamoDB config')
             return None
 
-        # Extract prompt
-        if 'prompt' not in item:
-            log.warning('Prompt field not found in DynamoDB item')
-            return None
+        # Extract routing rules
+        routing_rules = item.get('routing_rules', {}).get('S', '')
+        log.info('Retrieved routing rules from DynamoDB')
 
-        prompt = item['prompt'].get('S', '')
-        log.info('Retrieved routing prompt from DynamoDB')
-        return prompt
+        if not routing_rules or routing_rules.strip() == '':
+            log.warning('Routing rules are empty, using default routing rules')
+            return DEFAULT_ROUTING_RULES
+
+        return routing_rules
 
     except ClientError as e:
-        log.error('DynamoDB error fetching routing prompt: %s', e)
-        return None
+        log.error('DynamoDB error fetching routing rules: %s, using defaults', e)
+        return DEFAULT_ROUTING_RULES
     except Exception as e:
-        log.error('Unexpected error fetching routing prompt: %s', e)
-        return None
+        log.error('Unexpected error fetching routing rules: %s, using defaults', e)
+        return DEFAULT_ROUTING_RULES
 
 
 def get_ai_routing_decision(email_content):
@@ -139,21 +166,24 @@ def get_ai_routing_decision(email_content):
     Returns dict with route_to, tags, confidence, reasoning or None on failure.
     """
     try:
-        # Get routing prompt from DynamoDB
-        routing_prompt = get_routing_prompt()
-        if not routing_prompt:
-            log.info('No routing prompt available, skipping AI routing')
+        # Get routing rules from DynamoDB (or use defaults)
+        routing_rules = get_routing_rules()
+        if routing_rules is None:
+            log.info('AI routing disabled in configuration')
             return None
 
         # Prepare email content for analysis
         sender = email_content.get('sender', '')
         subject = email_content.get('subject', '')
-        body = email_content.get('body', '')
+        body = email_content.get('body', '')[:2000]  # Limit body length
 
-        # Build the full prompt
-        full_prompt = routing_prompt.replace('{sender}', sender)
-        full_prompt = full_prompt.replace('{subject}', subject)
-        full_prompt = full_prompt.replace('{body}', body[:2000])  # Limit body length
+        # Build the full prompt using system template + routing rules + email content
+        full_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            routing_rules=routing_rules,
+            sender=sender,
+            subject=subject,
+            body=body
+        )
 
         # Prepare Bedrock request
         request_body = {

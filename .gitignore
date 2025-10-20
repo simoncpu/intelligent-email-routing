@@ -47,5 +47,9 @@ crash.*.log
 # AWS
 .aws/
 
+# Environment variables (API keys)
+.env
+.env.*
+
 # Project-specific
 claude_notes.md

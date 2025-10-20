@@ -111,8 +111,8 @@ resource "aws_ses_domain_identity_verification" "this" {
 
 # Configure custom MAIL FROM domain
 resource "aws_ses_domain_mail_from" "this" {
-  domain           = aws_ses_domain_identity.this.domain
-  mail_from_domain = "forwarder.${var.domain_name}"
+  domain                 = aws_ses_domain_identity.this.domain
+  mail_from_domain       = "forwarder.${var.domain_name}"
   behavior_on_mx_failure = "RejectMessage"
 }
 
@@ -137,9 +137,9 @@ resource "aws_dynamodb_table" "routing" {
   }
 
   tags = {
-    Name        = "${var.project_name}-routing"
-    Purpose     = "AI email routing and general storage"
-    ManagedBy   = "Terraform"
+    Name      = "${var.project_name}-routing"
+    Purpose   = "AI email routing and general storage"
+    ManagedBy = "Terraform"
   }
 }
 
@@ -152,9 +152,9 @@ resource "aws_iam_role" "lambda" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow",
+      Effect    = "Allow",
       Principal = { Service = "lambda.amazonaws.com" },
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -178,13 +178,13 @@ resource "aws_iam_role_policy" "lambda" {
         ]
       },
       {
-        Effect = "Allow",
-        Action = ["s3:GetObject"],
+        Effect   = "Allow",
+        Action   = ["s3:GetObject"],
         Resource = "${aws_s3_bucket.mail.arn}/*"
       },
       {
-        Effect = "Allow",
-        Action = ["ses:SendRawEmail"],
+        Effect   = "Allow",
+        Action   = ["ses:SendRawEmail"],
         Resource = "*"
       },
       {
@@ -227,13 +227,13 @@ data "archive_file" "lambda_zip" {
 }
 
 resource "aws_lambda_function" "forwarder" {
-  function_name = "${var.project_name}-forwarder"
-  role          = aws_iam_role.lambda.arn
-  handler       = "lambda.handler"
-  runtime       = "python3.13"
-  filename      = data.archive_file.lambda_zip.output_path
+  function_name    = "${var.project_name}-forwarder"
+  role             = aws_iam_role.lambda.arn
+  handler          = "lambda.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  timeout       = 30
+  timeout          = 30
   environment {
     variables = {
       S3_BUCKET          = aws_s3_bucket.mail.bucket
@@ -273,10 +273,10 @@ resource "aws_ses_receipt_rule" "catchall" {
   enabled       = true
 
   # Match the whole domain (catch-all)
-  recipients    = [var.domain_name]
+  recipients = [var.domain_name]
 
-  scan_enabled  = true
-  tls_policy    = "Optional"
+  scan_enabled = true
+  tls_policy   = "Optional"
 
   s3_action {
     bucket_name       = aws_s3_bucket.mail.bucket
@@ -310,6 +310,102 @@ resource "aws_s3_bucket_lifecycle_configuration" "mail" {
     status = "Enabled"
     filter { prefix = "${var.domain_name}/" }
     expiration { days = 30 }
+  }
+}
+
+############################################
+# MCP Server Infrastructure
+############################################
+
+# IAM role for MCP Lambda
+resource "aws_iam_role" "mcp_lambda" {
+  name = "${var.project_name}-mcp-lambda-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# IAM policy for MCP Lambda
+resource "aws_iam_role_policy" "mcp_lambda" {
+  name = "${var.project_name}-mcp-lambda-policy"
+  role = aws_iam_role.mcp_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = [
+          aws_cloudwatch_log_group.mcp_lambda_logs.arn,
+          "${aws_cloudwatch_log_group.mcp_lambda_logs.arn}:*"
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query"
+        ],
+        Resource = aws_dynamodb_table.routing.arn
+      }
+    ]
+  })
+}
+
+# CloudWatch Log Group for MCP Lambda
+resource "aws_cloudwatch_log_group" "mcp_lambda_logs" {
+  name              = "/aws/lambda/${var.project_name}-mcp-server"
+  retention_in_days = 30
+}
+
+# Lambda deployment package for MCP server
+data "archive_file" "mcp_lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/mcp_lambda.py"
+  output_path = "${path.module}/mcp_lambda.zip"
+}
+
+# MCP Lambda function
+resource "aws_lambda_function" "mcp_server" {
+  function_name    = "${var.project_name}-mcp-server"
+  role             = aws_iam_role.mcp_lambda.arn
+  handler          = "mcp_lambda.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.mcp_lambda_zip.output_path
+  source_code_hash = data.archive_file.mcp_lambda_zip.output_base64sha256
+  timeout          = 30
+  environment {
+    variables = {
+      ROUTING_TABLE = aws_dynamodb_table.routing.name
+    }
+  }
+  depends_on = [
+    aws_cloudwatch_log_group.mcp_lambda_logs
+  ]
+}
+
+# Lambda Function URL for MCP server
+resource "aws_lambda_function_url" "mcp_server" {
+  function_name      = aws_lambda_function.mcp_server.function_name
+  authorization_type = "NONE"
+
+  cors {
+    allow_origins  = ["*"]
+    allow_methods  = ["POST"]
+    allow_headers  = ["authorization", "content-type"]
+    expose_headers = ["content-type"]
+    max_age        = 3600
   }
 }
 

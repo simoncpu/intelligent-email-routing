@@ -348,6 +348,100 @@ aws dynamodb put-item --table-name ses-catchall-forwarder-routing --item file://
 - Separate roles for prompt management
 - Audit trail for routing decisions
 
+## MCP Server for Interactive Prompt Management
+
+### Purpose
+
+Expose a Model Context Protocol (MCP) server that allows AI assistants (like Claude Desktop) to help users interactively create and refine email routing prompts through natural conversation. The MCP server bridges conversational AI with DynamoDB routing configuration.
+
+### Key Requirements
+
+**Goal**: Enable users to work conversationally with AI to build and refine routing prompts without manually editing DynamoDB or redeploying infrastructure.
+
+**Core Capabilities**:
+- Get current routing prompt from DynamoDB
+- Update routing prompt through conversation
+- View prompt change history
+- Validate prompt syntax before applying
+
+### Architecture Overview
+
+```
+Claude Desktop (MCP Client) <-> Lambda Function URL <-> MCP Lambda <-> DynamoDB
+```
+
+**Key Decisions**:
+- Use Lambda Function URL (not API Gateway) for simplicity and cost savings
+- Use open auth with API key validation (not IAM auth) for easier client setup
+- Store API keys as SHA256 hashes in existing DynamoDB routing table
+- Leverage composite key pattern: pk="API_KEY", sk="<hash>"
+
+### Infrastructure Components
+
+**Lambda Function**:
+- Python 3.13 runtime with awslabs.mcp-lambda-handler library
+- Function URL with CORS enabled
+- 30-second timeout
+- Environment variables: ROUTING_TABLE
+
+**API Key Storage in DynamoDB**:
+- Uses existing routing table with composite key pattern
+- pk="API_KEY", sk=SHA256(api_key)
+- Attributes: key_name, created_at, expires_at, is_active, permissions, last_used_at
+- Keys can be created, revoked, and have expiration dates
+
+**IAM Permissions**:
+- DynamoDB: GetItem, PutItem, UpdateItem, Query on routing table
+- CloudWatch Logs: CreateLogStream, PutLogEvents
+
+**Outputs**:
+- Function URL for MCP client configuration
+
+### MCP Tools
+
+Expose these tools for prompt management:
+1. get_routing_prompt() - Fetch current prompt from DynamoDB
+2. update_routing_prompt(prompt) - Update prompt in DynamoDB
+3. get_prompt_history() - View previous prompt versions
+4. validate_prompt_syntax(prompt) - Check if prompt is valid
+
+### Conversation Flow Example
+
+User asks Claude Desktop to help set up email routing. Claude uses MCP tools to:
+1. Get current prompt configuration
+2. Ask user about their routing needs
+3. Build prompt iteratively through conversation
+4. Validate syntax before applying
+5. Update production prompt when user approves
+
+### API Key Management
+
+**Create Key**: Generate random key, hash with SHA256, store in DynamoDB with permissions
+**Revoke Key**: Update is_active flag to false
+**Permissions**: Each key has list of allowed MCP tools
+
+### Cost Considerations
+
+Lambda Function URL approach saves 90% vs API Gateway:
+- Lambda Function URL: No charge
+- Lambda invocations: ~$0.02/month (100 updates)
+- DynamoDB: ~$0.01/month
+- Total: ~$0.04/month vs ~$0.38/month with API Gateway
+
+### Security
+
+- API keys stored as irreversible SHA256 hashes
+- HTTPS enforced by Lambda Function URL
+- Per-key permissions and expiration dates
+- All access logged in CloudWatch
+- No AWS credentials needed by MCP clients
+
+### Prompt Version History
+
+Store prompt versions in DynamoDB for rollback:
+- pk="HISTORY", sk="routing_prompt#<timestamp>"
+- Enables tracking changes and reverting to previous versions
+
 ## Future Enhancements
 
 ### Advanced Features
@@ -359,6 +453,13 @@ aws dynamodb put-item --table-name ses-catchall-forwarder-routing --item file://
 6. **Time-based Routing**: Different rules for business hours
 7. **Escalation Paths**: Automatic escalation for unresolved issues
 8. **Analytics Dashboard**: Visualize routing patterns
+
+### MCP Server Enhancements
+- Test prompts against sample emails before deploying
+- A/B testing with multiple prompts
+- Natural language prompt builder
+- AI-powered prompt optimization suggestions
+- Real-time routing analytics
 
 ### Integration Possibilities
 - Slack/Teams notifications for urgent emails

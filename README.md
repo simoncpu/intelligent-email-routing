@@ -6,6 +6,7 @@ An intelligent email forwarding system that routes emails sent to `*@yourdomain.
 
 - **Catch-all forwarding**: Forward any email sent to your domain
 - **AI-powered routing** (optional): Automatically classify, tag, and route emails using Claude Sonnet 4.5
+- **Conversational prompt management** (optional): Use Claude Desktop to update routing rules through natural conversation
 - **Multi-domain support**: Manage multiple domains in the same AWS account
 - **Automated DNS setup**: All DNS records configured automatically via Route53
 - **DMARC/SPF compliant**: Preserves email authentication and deliverability
@@ -20,6 +21,7 @@ When you run `terraform apply`, these AWS resources are created:
 - **SES domain identity**: Verifies your domain and configures DKIM
 - **Lambda function**: Python 3.13 function that processes and forwards emails
 - **DynamoDB table**: Stores AI routing configuration (when AI routing enabled)
+- **MCP server** (optional): Lambda function with public URL for conversational prompt management
 - **IAM roles/policies**: Minimal permissions for Lambda execution
 - **CloudWatch logs**: 30-day retention for debugging
 
@@ -181,6 +183,96 @@ Send a test email - Claude will analyze it and add the [TEST] tag to the subject
 
 For advanced routing rules, see [docs/bedrock.md](docs/bedrock.md).
 
+## Conversational Prompt Management (Optional)
+
+The MCP (Model Context Protocol) server lets you manage email routing rules through natural conversation with Claude Desktop - no need to manually edit DynamoDB or redeploy infrastructure.
+
+### What You Can Do
+
+Ask Claude Desktop to help you:
+- View your current routing rules
+- Update routing logic with new rules
+- Add tags for specific email types (urgent, sales, support)
+- Review past prompt versions
+- Test prompt syntax before applying changes
+
+### Quick Setup
+
+1. **Deploy the MCP server** (included automatically with `terraform apply`)
+
+2. **Get your MCP server URL**:
+   ```bash
+   terraform output mcp_server_url
+   ```
+
+3. **Create an API key**:
+   ```bash
+   ./scripts/create-api-key.sh
+   ```
+   This creates a secure API key and stores it in DynamoDB.
+
+4. **Configure Claude Desktop**:
+
+   Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or equivalent:
+
+   ```json
+   {
+     "mcpServers": {
+       "email-routing": {
+         "url": "https://YOUR-FUNCTION-URL.lambda-url.us-east-1.on.aws/",
+         "headers": {
+           "Authorization": "Bearer YOUR-API-KEY"
+         }
+       }
+     }
+   }
+   ```
+
+   Replace `YOUR-FUNCTION-URL` with the output from step 2, and `YOUR-API-KEY` with the key from `.env` file.
+
+5. **Start using it**:
+
+   Restart Claude Desktop and ask:
+   ```
+   "Show me the current email routing prompt"
+   "Update the routing rules to send sales emails to sales@example.com"
+   "Add an [URGENT] tag for emails containing 'emergency' or 'critical'"
+   ```
+
+### Example Conversation
+
+```
+You: I want to route customer support emails to support@example.com
+
+Claude: I'll help you update the routing prompt. Let me first check the current configuration.
+        [Uses MCP to get current prompt]
+
+        I can see you currently have basic routing. I'll add a rule to detect customer
+        support inquiries. Here's what I'll add:
+
+        - Customer support keywords: help, issue, problem, support, can't access
+        - Route to: support@example.com
+        - Tag: [SUPPORT]
+
+        Should I update the prompt with these rules?
+
+You: Yes, please
+
+Claude: [Uses MCP to update prompt]
+        Done! I've updated your routing rules. Customer support emails will now be
+        routed to support@example.com with a [SUPPORT] tag.
+```
+
+### Benefits
+
+- **No redeployment needed**: Update routing rules without running `terraform apply`
+- **Iterative refinement**: Test and adjust rules based on real emails
+- **Version history**: Automatically archives old prompts for rollback
+- **Validation**: Check prompt syntax before applying changes
+- **Conversational**: Describe what you want in plain English
+
+For complete MCP server documentation, see [docs/mcp-server.md](docs/mcp-server.md).
+
 ## How It Works
 
 ### Standard Email Flow
@@ -202,24 +294,6 @@ Same as above, plus:
 6. Claude returns routing decision (recipients, tags, confidence)
 7. Lambda routes to AI-determined recipient(s) with subject tags
 8. Falls back to default forwarding if AI fails
-
-## Cost Breakdown
-
-Estimated monthly costs for 1,000 emails:
-
-| Service | Cost |
-|---------|------|
-| SES receiving | $0.10 (first 1,000 free) |
-| SES sending | $0.10 |
-| S3 storage | $0.02 |
-| Lambda execution | $0.00 (free tier) |
-| Route53 hosted zone | $0.50 |
-| DynamoDB | $0.00 (free tier) |
-| **Total (standard mode)** | **~$0.72/month** |
-| Bedrock Claude (AI mode) | +$0.90 |
-| **Total (AI mode)** | **~$1.62/month** |
-
-For 10,000 emails/month, expect ~$7-16 depending on AI usage.
 
 ## Monitoring and Logs
 
@@ -295,6 +369,41 @@ aws dynamodb get-item \
 
 For detailed Bedrock troubleshooting, see [docs/bedrock.md](docs/bedrock.md).
 
+### MCP Server Not Working
+
+1. Verify MCP server is deployed:
+   ```bash
+   terraform output mcp_server_url
+   ```
+
+2. Test API key authentication:
+   ```bash
+   API_KEY=$(grep MCP_API_KEY .env | cut -d'=' -f2)
+   MCP_URL=$(terraform output -raw mcp_server_url)
+
+   curl -X POST "$MCP_URL" \
+     -H "Authorization: Bearer $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"method":"tools/list","params":{}}'
+   ```
+
+3. Check MCP server logs:
+   ```bash
+   aws logs tail /aws/lambda/ai-email-forwarder-mcp-server --follow
+   ```
+
+4. Verify API key exists in DynamoDB:
+   ```bash
+   TABLE_NAME=$(terraform output -raw dynamodb_table_name)
+   KEY_HASH=$(echo -n "$API_KEY" | shasum -a 256 | awk '{print $1}')
+
+   aws dynamodb get-item \
+     --table-name "$TABLE_NAME" \
+     --key '{"pk":{"S":"API_KEY"},"sk":{"S":"'$KEY_HASH'"}}'
+   ```
+
+For detailed MCP troubleshooting, see [docs/mcp-server.md](docs/mcp-server.md).
+
 ### Multiple Domains Issues
 
 1. **Previous domain stopped working**: Check that the SES receipt rule set `ses-catchall-forwarder-rules` is active:
@@ -312,9 +421,12 @@ For detailed Bedrock troubleshooting, see [docs/bedrock.md](docs/bedrock.md).
 - `variables.tf` - Input variables with defaults
 - `outputs.tf` - Outputs for DNS and verification
 - `lambda.py` - Python Lambda function for email forwarding
+- `mcp_lambda.py` - Python Lambda function for MCP server (prompt management)
 - `terraform.tfvars` - Your configuration (not in git)
 - `CLAUDE.md` - Developer documentation for AI assistance
 - `docs/bedrock.md` - Detailed Bedrock configuration and troubleshooting
+- `docs/mcp-server.md` - MCP server setup and usage guide
+- `scripts/create-api-key.sh` - Helper script to create MCP API keys
 
 ## Advanced Configuration
 
@@ -362,11 +474,11 @@ This project follows AWS security best practices:
 To remove all resources:
 
 ```bash
-# Destroy infrastructure
+# Destroy infrastructure (removes MCP server, Lambda, S3, DynamoDB, etc.)
 terraform destroy
 
 # Clean up local files
-rm -rf .terraform terraform.tfstate* lambda.zip
+rm -rf .terraform terraform.tfstate* lambda.zip mcp_lambda.zip .env
 ```
 
 Note: S3 bucket must be empty before destruction. Set `force_destroy = true` in main.tf to automatically empty bucket.

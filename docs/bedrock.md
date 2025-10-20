@@ -74,7 +74,7 @@ The Lambda function requires these Bedrock permissions ([main.tf:198-205](../mai
 
 ### Table Structure
 
-The routing prompt is stored in DynamoDB with this schema:
+The routing rules are stored in DynamoDB with this schema:
 
 ```
 Table: {project_name}-routing
@@ -82,7 +82,7 @@ Partition Key (pk): "CONFIG"
 Sort Key (sk): "routing_prompt"
 
 Required Attributes:
-- prompt (String): The routing instructions for Claude
+- routing_rules (String): Business logic for routing (destinations, tags, conditions)
 - enabled (Boolean): Enable/disable AI routing at runtime
 - updated_at (String): ISO 8601 timestamp of last update
 
@@ -92,56 +92,70 @@ Optional Attributes:
 - max_tokens (Number): Override default max tokens
 ```
 
-### Example Routing Prompt
+### System Prompt Template
 
-Create a simple routing prompt for testing:
+**Security Note**: The system prompt template is hard-coded in [lambda.py:31-50](../lambda.py#L31-L50) to prevent prompt injection attacks. Users can only configure the routing rules (business logic), not the entire prompt structure or JSON response format.
+
+The hard-coded template includes:
+- Email content placeholders ({sender}, {subject}, {body})
+- JSON response format requirements
+- Security constraints
+
+This separation ensures:
+- Reliable JSON output (always parseable)
+- Protection against prompt injection
+- Users control routing logic, not system behavior
+
+### Example Routing Rules
+
+Create simple routing rules for testing:
 
 ```json
 {
   "pk": {"S": "CONFIG"},
   "sk": {"S": "routing_prompt"},
-  "prompt": {"S": "Prepend [TEST] to email subjects for all incoming email. Return JSON: {\"route_to\": [\"your@gmail.com\"], \"tags\": [\"TEST\"], \"confidence\": 1.0, \"reasoning\": \"Test routing\"}"},
+  "routing_rules": {"S": "- Route all emails to the default address\n- Add [TEST] tag to all messages\n- Use high confidence (0.9)"},
   "enabled": {"BOOL": true},
   "updated_at": {"S": "2025-01-15T12:00:00Z"}
 }
 ```
 
-### Adding Routing Prompt via AWS CLI
+**Note**: Do NOT include email content placeholders ({sender}, {subject}, {body}) or JSON format requirements in routing rules. Those are in the hard-coded system template.
+
+### Adding Routing Rules via AWS CLI
 
 ```bash
 # Set your values
 TABLE_NAME="ai-email-routing"
 FORWARD_EMAIL="your@gmail.com"
 
-# Create routing-prompt.json
-cat > routing-prompt.json <<'EOF'
+# Create routing-rules.json with simple routing logic
+cat > routing-rules.json <<'EOF'
 {
   "pk": {"S": "CONFIG"},
   "sk": {"S": "routing_prompt"},
-  "prompt": {"S": "Analyze this email and route it appropriately.\n\nEMAIL CONTENT:\nFrom: {sender}\nSubject: {subject}\nBody: {body}\n\nRESPONSE FORMAT (JSON only):\n{\"route_to\": [\"email@example.com\"], \"tags\": [\"TAG1\"], \"confidence\": 0.95, \"reasoning\": \"Brief explanation\"}"},
+  "routing_rules": {"S": "- Route all emails to the default forward address\n- Add [EMAIL] tag to all messages\n- Use high confidence (0.9) for default routing"},
   "enabled": {"BOOL": true},
   "updated_at": {"S": "2025-01-15T12:00:00Z"}
 }
 EOF
 
 # Upload to DynamoDB
-aws dynamodb put-item --table-name "$TABLE_NAME" --item file://routing-prompt.json
+aws dynamodb put-item --table-name "$TABLE_NAME" --item file://routing-rules.json
 
 # Verify
 aws dynamodb get-item \
   --table-name "$TABLE_NAME" \
   --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
-  --query 'Item.prompt.S' \
+  --query 'Item.routing_rules.S' \
   --output text
 ```
 
-### Advanced Routing Prompt Example
+### Advanced Routing Rules Example
 
 For production use with multiple routing destinations:
 
 ```
-You are an email routing assistant for a business. Analyze the email and determine routing.
-
 ROUTING RULES:
 - Customer support inquiries -> support@example.com
 - Account issues -> support@example.com with [ACCOUNT] tag
@@ -153,15 +167,65 @@ ROUTING RULES:
 PRIORITY DETECTION:
 - Urgent keywords (urgent, critical, emergency) -> Add [URGENT] tag
 - Angry/frustrated tone -> Add [ESCALATION] tag
-
-EMAIL CONTENT:
-From: {sender}
-Subject: {subject}
-Body: {body}
-
-Return JSON only (no markdown, no explanations):
-{"route_to": ["email@example.com"], "tags": ["TAG1", "TAG2"], "confidence": 0.95, "reasoning": "Brief explanation"}
 ```
+
+**Important**: The system template automatically:
+- Provides email content to Claude ({sender}, {subject}, {body})
+- Enforces JSON response format
+- Prevents prompt injection attacks
+
+### Fallback Behavior
+
+If DynamoDB is unavailable or routing rules are empty, the system uses default routing rules defined in [lambda.py:52-55](../lambda.py#L52-L55):
+
+```python
+DEFAULT_ROUTING_RULES = """- Route all emails to the default forward address
+- Add [EMAIL] tag to all messages
+- Use high confidence (0.9) for default routing"""
+```
+
+This ensures the system remains operational even during DynamoDB outages.
+
+### Migration from Legacy "prompt" Field
+
+If you have existing data using the old `prompt` field, migrate it to `routing_rules`:
+
+**Option 1: Using MCP Server (Recommended)**
+
+```
+User: Show me the current routing rules
+Claude: [Reads from old 'prompt' field if it exists]
+
+User: Update the routing rules with: <paste the rules shown>
+Claude: [Writes to new 'routing_rules' field]
+```
+
+This automatically archives the old version and writes to the new field.
+
+**Option 2: Using AWS CLI**
+
+```bash
+# Read current value from old field
+OLD_PROMPT=$(aws dynamodb get-item \
+  --table-name ai-email-routing \
+  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
+  --query 'Item.prompt.S' --output text)
+
+# Write to new field and remove old field
+aws dynamodb update-item \
+  --table-name ai-email-routing \
+  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
+  --update-expression "SET routing_rules = :rules REMOVE prompt" \
+  --expression-attribute-values "{\":rules\":{\"S\":\"$OLD_PROMPT\"}}"
+
+# Verify migration
+aws dynamodb get-item \
+  --table-name ai-email-routing \
+  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
+  --query 'Item.routing_rules.S' --output text
+```
+
+**Note**: After migrating, deploy the updated Lambda functions with `terraform apply`.
 
 ## Troubleshooting Bedrock Issues
 
@@ -222,16 +286,12 @@ aws bedrock list-foundation-models --region us-east-1 \
 **Error**: `JSONDecodeError` in Lambda logs
 
 **Solutions**:
-1. Update routing prompt to explicitly request JSON only
-2. Add "Return JSON only (no markdown)" to prompt
-3. Check CloudWatch logs for actual AI response
-4. Increase max_tokens if response is truncated
+1. Check CloudWatch logs for actual AI response
+2. Verify system prompt template is being used correctly
+3. Increase max_tokens if response is truncated
+4. Check if routing rules contain instructions that conflict with JSON format
 
-**Prompt improvement**:
-```
-Return ONLY valid JSON with no markdown formatting, no code blocks, no explanations:
-{"route_to": ["email@example.com"], "tags": [], "confidence": 0.9, "reasoning": ""}
-```
+**Note**: JSON format is enforced by the hard-coded system template in [lambda.py:31-50](../lambda.py#L31-L50), so this error is rare. If it occurs, the issue is likely with the Bedrock model or API call, not the routing rules.
 
 ### High Latency
 
@@ -333,11 +393,13 @@ INFO Forwarded {messageId} -> your@gmail.com
      --environment "Variables={VERBOSE_LOGGING=true,...}"
    ```
 
-2. **Check DynamoDB prompt**:
+2. **Check DynamoDB routing rules**:
    ```bash
    aws dynamodb get-item \
      --table-name ai-email-routing \
-     --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}'
+     --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
+     --query 'Item.routing_rules.S' \
+     --output text
    ```
 
 3. **Test Bedrock directly**:
