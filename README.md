@@ -191,7 +191,7 @@ For advanced routing rules, see [docs/bedrock.md](docs/bedrock.md).
 
 ## Conversational Prompt Management (Optional)
 
-<video controls src="docs/mcp-claude.mov" title="MCP Server using Claude Code"></video>
+![MCP Server using Claude Code](docs/mcp-claude.gif)
 
 The MCP (Model Context Protocol) server lets you manage email routing rules through natural conversation with Claude Code - no need to manually edit DynamoDB or redeploy infrastructure.
 
