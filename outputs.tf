@@ -32,3 +32,23 @@ output "dynamodb_table_name" {
   value       = aws_dynamodb_table.routing.name
   description = "DynamoDB table name for AI routing configuration"
 }
+
+output "lambda_function_name" {
+  value       = aws_lambda_function.forwarder.function_name
+  description = "Lambda function name for email forwarding"
+}
+
+output "lambda_log_group_name" {
+  value       = aws_cloudwatch_log_group.lambda_logs.name
+  description = "CloudWatch log group name for email forwarder Lambda"
+}
+
+output "mcp_function_name" {
+  value       = aws_lambda_function.mcp_server.function_name
+  description = "MCP server Lambda function name"
+}
+
+output "mcp_log_group_name" {
+  value       = aws_cloudwatch_log_group.mcp_lambda_logs.name
+  description = "CloudWatch log group name for MCP server Lambda"
+}

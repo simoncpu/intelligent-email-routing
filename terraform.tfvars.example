@@ -1,3 +1,8 @@
+# Optional: Customize resource names (default: "ai-email")
+# This affects Lambda function names, log groups, and DynamoDB table names
+# Uncomment and modify if deploying multiple instances or prefer custom naming
+# project_name = "my-email-forwarder"
+
 domain_name      = "example.org"
 forward_to_email = "myrealemail@gmail.com"
 region           = "us-east-1"

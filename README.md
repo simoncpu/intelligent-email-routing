@@ -2,11 +2,17 @@
 
 An intelligent email forwarding system that routes emails sent to `*@example.org` to your destination address (e.g., Gmail). Uses AWS Bedrock Claude to intelligently analyze and route emails based on content.
 
+## Architecture Overview
+
+![AWS Architecture](docs/ai-email-architecture.png)
+
+This system works by pointing your domain's MX records to Amazon SES, which receives all incoming emails and stores them in an S3 bucket. A Lambda function is automatically triggered to process each email, sending the content to AWS Bedrock's Claude AI for intelligent routing decisions (like adding tags or routing to specific addresses based on content). Lambda then forwards the email to your destination address via SES, preserving the original message as an attachment. All DNS records are automatically configured in Route53, and DynamoDB stores your AI routing rules which you can update conversationally through Claude Code using the included MCP server - no need to redeploy infrastructure when you want to change how emails are routed.
+
 ## Features
 
 - **Catch-all forwarding**: Forward any email sent to your domain
 - **AI-powered routing** (optional): Automatically classify, tag, and route emails using Claude Sonnet 4.5
-- **Conversational prompt management** (optional): Use Claude Desktop to update routing rules through natural conversation
+- **Conversational prompt management** (optional): Use Claude Code to update routing rules through natural conversation
 - **Multi-domain support**: Manage multiple domains in the same AWS account
 - **Automated DNS setup**: All DNS records configured automatically via Route53
 - **DMARC/SPF compliant**: Preserves email authentication and deliverability
@@ -185,11 +191,13 @@ For advanced routing rules, see [docs/bedrock.md](docs/bedrock.md).
 
 ## Conversational Prompt Management (Optional)
 
-The MCP (Model Context Protocol) server lets you manage email routing rules through natural conversation with Claude Desktop - no need to manually edit DynamoDB or redeploy infrastructure.
+<video controls src="docs/mcp-claude.mov" title="MCP Server using Claude Code"></video>
+
+The MCP (Model Context Protocol) server lets you manage email routing rules through natural conversation with Claude Code - no need to manually edit DynamoDB or redeploy infrastructure.
 
 ### What You Can Do
 
-Ask Claude Desktop to help you:
+Ask Claude Code to help you:
 - View your current routing rules
 - Update routing logic with new rules
 - Add tags for specific email types (urgent, sales, support)
@@ -209,30 +217,33 @@ Ask Claude Desktop to help you:
    ```bash
    ./scripts/create-api-key.sh
    ```
-   This creates a secure API key and stores it in DynamoDB.
+   This creates a secure API key and stores it in DynamoDB. The key will be saved to `.env` file.
 
-4. **Configure Claude Desktop**:
+4. **Add MCP server to Claude Code**:
 
-   Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or equivalent:
+   ```bash
+   # Get your server URL and API key
+   MCP_URL=$(terraform output -raw mcp_server_url)
+   API_KEY=$(grep MCP_API_KEY .env | cut -d'=' -f2)
 
-   ```json
-   {
-     "mcpServers": {
-       "email-routing": {
-         "url": "https://YOUR-FUNCTION-URL.lambda-url.us-east-1.on.aws/",
-         "headers": {
-           "Authorization": "Bearer YOUR-API-KEY"
-         }
-       }
-     }
-   }
+   # Add the MCP server
+   claude mcp add --transport http email-routing "$MCP_URL" \
+     --header "Authorization: Bearer $API_KEY"
    ```
 
-   Replace `YOUR-FUNCTION-URL` with the output from step 2, and `YOUR-API-KEY` with the key from `.env` file.
+   To verify it was added:
+   ```bash
+   claude mcp list
+   ```
+
+   To remove it later (if needed):
+   ```bash
+   claude mcp remove email-routing
+   ```
 
 5. **Start using it**:
 
-   Restart Claude Desktop and ask:
+   Ask Claude Code:
    ```
    "Show me the current email routing prompt"
    "Update the routing rules to send sales emails to sales@example.com"
@@ -273,27 +284,7 @@ Claude: [Uses MCP to update prompt]
 
 For complete MCP server documentation, see [docs/mcp-server.md](docs/mcp-server.md).
 
-## How It Works
-
-### Standard Email Flow
-
-1. Email arrives at SES (`any-address@yourdomain.org`)
-2. SES stores raw email in S3 bucket (`yourdomain.org/{messageId}`)
-3. SES triggers Lambda function
-4. Lambda fetches email from S3
-5. Lambda creates new email with original attached as `message/rfc822`
-6. Lambda forwards via SES to your destination address
-
-### AI-Powered Flow (when enabled)
-
-Same as above, plus:
-
-3. Lambda extracts email content (text/HTML)
-4. Lambda fetches routing prompt from DynamoDB
-5. Lambda sends content to Bedrock Claude for analysis
-6. Claude returns routing decision (recipients, tags, confidence)
-7. Lambda routes to AI-determined recipient(s) with subject tags
-8. Falls back to default forwarding if AI fails
+For implementation details and architecture documentation, see [docs/architecture.md](docs/architecture.md).
 
 ## Monitoring and Logs
 
@@ -301,11 +292,11 @@ Same as above, plus:
 
 ```bash
 # Follow logs in real-time
-aws logs tail /aws/lambda/ai-email-forwarder --follow
+aws logs tail "$(terraform output -raw lambda_log_group_name)" --follow
 
 # Search for errors
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/ai-email-forwarder \
+  --log-group-name "$(terraform output -raw lambda_log_group_name)" \
   --filter-pattern "ERROR"
 ```
 
@@ -314,7 +305,7 @@ aws logs filter-log-events \
 ```bash
 # See AI routing decisions
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/ai-email-forwarder \
+  --log-group-name "$(terraform output -raw lambda_log_group_name)" \
   --filter-pattern "AI routing decision"
 ```
 
@@ -322,7 +313,7 @@ aws logs filter-log-events \
 
 ```bash
 aws dynamodb get-item \
-  --table-name ai-email-routing \
+  --table-name "$(terraform output -raw dynamodb_table_name)" \
   --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}' \
   --query 'Item.prompt.S' \
   --output text
@@ -330,112 +321,15 @@ aws dynamodb get-item \
 
 ## Troubleshooting
 
-### No Emails Received
-
-1. Check MX record points to SES:
-   ```bash
-   dig MX example.org
-   # Should show: 10 inbound-smtp.us-east-1.amazonaws.com
-   ```
-
-2. Verify domain is verified in SES:
-   ```bash
-   aws ses get-identity-verification-attributes --identities example.org
-   ```
-
-3. Check Lambda logs for errors:
-   ```bash
-   aws logs tail /aws/lambda/ai-email-forwarder --follow
-   ```
-
-### AI Routing Not Working
-
-1. Verify AI routing is enabled:
-   ```bash
-   terraform output | grep ai_routing
-   ```
-
-2. Check Bedrock model access:
-   ```bash
-   aws bedrock list-foundation-models --region us-east-1 | grep claude-sonnet-4-5
-   ```
-
-3. Verify routing prompt exists in DynamoDB:
-   ```bash
-   aws dynamodb get-item \
-     --table-name ai-email-routing \
-     --key '{"pk":{"S":"CONFIG"},"sk":{"S":"routing_prompt"}}'
-   ```
-
-For detailed Bedrock troubleshooting, see [docs/bedrock.md](docs/bedrock.md).
-
-### MCP Server Not Working
-
-1. Verify MCP server is deployed:
-   ```bash
-   terraform output mcp_server_url
-   ```
-
-2. Test API key authentication:
-   ```bash
-   API_KEY=$(grep MCP_API_KEY .env | cut -d'=' -f2)
-   MCP_URL=$(terraform output -raw mcp_server_url)
-
-   curl -X POST "$MCP_URL" \
-     -H "Authorization: Bearer $API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"method":"tools/list","params":{}}'
-   ```
-
-3. Check MCP server logs:
-   ```bash
-   aws logs tail /aws/lambda/ai-email-forwarder-mcp-server --follow
-   ```
-
-4. Verify API key exists in DynamoDB:
-   ```bash
-   TABLE_NAME=$(terraform output -raw dynamodb_table_name)
-   KEY_HASH=$(echo -n "$API_KEY" | shasum -a 256 | awk '{print $1}')
-
-   aws dynamodb get-item \
-     --table-name "$TABLE_NAME" \
-     --key '{"pk":{"S":"API_KEY"},"sk":{"S":"'$KEY_HASH'"}}'
-   ```
-
-For detailed MCP troubleshooting, see [docs/mcp-server.md](docs/mcp-server.md).
-
-### Multiple Domains Issues
-
-1. **Previous domain stopped working**: Check that the SES receipt rule set `ses-catchall-forwarder-rules` is active:
-   ```bash
-   aws ses describe-active-receipt-rule-set
-   ```
-
-2. **Rule conflicts**: Ensure each domain uses a unique `project_name` in terraform.tfvars
-
-3. **Wrong bucket**: Verify the Lambda `S3_PREFIX` environment variable matches the domain name
-
-## Configuration Files
-
-- `main.tf` - Main Terraform infrastructure configuration
-- `variables.tf` - Input variables with defaults
-- `outputs.tf` - Outputs for DNS and verification
-- `lambda.py` - Python Lambda function for email forwarding
-- `mcp_lambda.py` - Python Lambda function for MCP server (prompt management)
-- `terraform.tfvars` - Your configuration (not in git)
-- `CLAUDE.md` - Developer documentation for AI assistance
-- `docs/bedrock.md` - Detailed Bedrock configuration and troubleshooting
-- `docs/mcp-server.md` - MCP server setup and usage guide
-- `scripts/create-api-key.sh` - Helper script to create MCP API keys
+For troubleshooting common issues including email delivery problems, AI routing failures, MCP server issues, and multi-domain conflicts, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Advanced Configuration
 
 ### Disable Email Deletion
 
-By default, emails are deleted from S3 after 30 days. To keep emails indefinitely:
+By default, emails are deleted from S3 after 30 days. To keep emails indefinitely, you can modify the S3 lifecycle configuration in `main.tf` and run `terraform apply`.
 
-1. Comment out the lifecycle rule in [main.tf:306-314](main.tf#L306-L314)
-2. Run `terraform apply`
+For details, see [docs/architecture.md](docs/architecture.md).
 
 ### Enable Verbose Logging
 
@@ -443,7 +337,7 @@ For detailed debugging information:
 
 ```bash
 aws lambda update-function-configuration \
-  --function-name ai-email-forwarder \
+  --function-name "$(terraform output -raw lambda_function_name)" \
   --environment "Variables={VERBOSE_LOGGING=true,...}"
 ```
 
@@ -482,19 +376,6 @@ rm -rf .terraform terraform.tfstate* lambda.zip mcp_lambda.zip .env
 ```
 
 Note: S3 bucket must be empty before destruction. Set `force_destroy = true` in main.tf to automatically empty bucket.
-
-## Contributing
-
-Contributions welcome! This project follows:
-- Black for Python formatting
-- Pylint for linting
-- Terraform fmt for HCL formatting
-
-```bash
-# Format and lint
-black lambda.py && pylint lambda.py
-terraform fmt
-```
 
 ## License
 
